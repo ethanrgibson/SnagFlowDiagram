@@ -1,0 +1,881 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="description" content="How the app answers an incoming client text today, and how Snag triage changes it.">
+<title>How Snag Handles an Incoming Text</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body { margin: 0; }
+  h1, h2, h3, h4, p, ul, ol, figure { margin: 0; }
+  img { max-width: 100%; height: auto; }
+  .mermaid-fallback {
+    margin: 0 0 12px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: #E39A3E;
+  }
+
+  :root {
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, ui-serif, serif;
+    --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+    /* Semantic hues — retuned per theme so contrast holds on both grounds */
+    --steel: #46617E;
+    --signal: #9A5F14;
+    --state: #2F6E62;
+    --voice: #4F55A8;
+    --halt: #A8443A;
+
+    /* Console: the diagram ground. Identical in both themes by design. */
+    --console: #0E131A;
+    --console-2: #141A23;
+    --console-rule: #232C38;
+    --console-muted: #8494A6;
+
+    /* Page chrome — light */
+    --bg: #FAFBFC;
+    --surface: #FFFFFF;
+    --surface-2: #F1F4F7;
+    --ink: #12181F;
+    --muted: #57626F;
+    --faint: #7C8794;
+    --rule: #E0E5EB;
+    --rule-strong: #C9D1DA;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --steel: #8DA8C2;
+      --signal: #E39A3E;
+      --state: #5FB3A3;
+      --voice: #9AA1EE;
+      --halt: #E08376;
+
+      --bg: #0B0F14;
+      --surface: #11171F;
+      --surface-2: #161D26;
+      --ink: #E6ECF3;
+      --muted: #9BA7B5;
+      --faint: #77828F;
+      --rule: #222B36;
+      --rule-strong: #303B48;
+    }
+  }
+
+  :root[data-theme="light"] {
+    --steel: #46617E;
+    --signal: #9A5F14;
+    --state: #2F6E62;
+    --voice: #4F55A8;
+    --halt: #A8443A;
+    --bg: #FAFBFC;
+    --surface: #FFFFFF;
+    --surface-2: #F1F4F7;
+    --ink: #12181F;
+    --muted: #57626F;
+    --faint: #7C8794;
+    --rule: #E0E5EB;
+    --rule-strong: #C9D1DA;
+  }
+
+  :root[data-theme="dark"] {
+    --steel: #8DA8C2;
+    --signal: #E39A3E;
+    --state: #5FB3A3;
+    --voice: #9AA1EE;
+    --halt: #E08376;
+    --bg: #0B0F14;
+    --surface: #11171F;
+    --surface-2: #161D26;
+    --ink: #E6ECF3;
+    --muted: #9BA7B5;
+    --faint: #77828F;
+    --rule: #222B36;
+    --rule-strong: #303B48;
+  }
+
+  html { background: var(--bg); }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .shell {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 0 24px 96px;
+    display: flex;
+    flex-direction: column;
+    gap: 56px;
+  }
+
+  .prose { max-width: 68ch; display: flex; flex-direction: column; gap: 14px; }
+  .prose p { margin: 0; color: var(--muted); }
+  .prose p strong { color: var(--ink); font-weight: 600; }
+
+  /* ---------- header ---------- */
+
+  .masthead { display: flex; flex-direction: column; gap: 20px; padding: 64px 0 0; }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--signal);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: baseline;
+  }
+  .eyebrow .sep { color: var(--rule-strong); }
+  .eyebrow .dim { color: var(--faint); }
+
+  h1 {
+    font-family: var(--serif);
+    font-size: clamp(2.1rem, 5vw, 3.1rem);
+    line-height: 1.08;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    text-wrap: balance;
+    margin: 0;
+  }
+
+  .standfirst {
+    font-family: var(--serif);
+    font-size: clamp(1.05rem, 2vw, 1.28rem);
+    line-height: 1.5;
+    color: var(--muted);
+    max-width: 60ch;
+    margin: 0;
+  }
+
+  .assume {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 16px 20px;
+    background: var(--surface-2);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    max-width: 72ch;
+  }
+  .assume .label {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+  .assume p { margin: 0; font-size: 14px; line-height: 1.55; color: var(--muted); }
+
+  /* ---------- sections ---------- */
+
+  section { display: flex; flex-direction: column; gap: 24px; scroll-margin-top: 24px; }
+  .sec-head { display: flex; flex-direction: column; gap: 10px; }
+
+  .sec-index {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+
+  h2 {
+    font-family: var(--serif);
+    font-size: clamp(1.55rem, 3.2vw, 2.05rem);
+    line-height: 1.15;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 0;
+    text-wrap: balance;
+  }
+
+  h3 {
+    font-family: var(--sans);
+    font-size: 0.94rem;
+    font-weight: 650;
+    margin: 0;
+    color: var(--ink);
+  }
+
+  /* ---------- legend ---------- */
+
+  .legend {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .legend-item { background: var(--surface); padding: 14px 16px; display: flex; flex-direction: column; gap: 5px; }
+  .legend-key {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink);
+  }
+  .swatch {
+    width: 22px; height: 12px;
+    border-radius: 2px;
+    flex: none;
+    border: 1.5px solid currentColor;
+    background: color-mix(in srgb, currentColor 16%, transparent);
+  }
+  .k-steel { color: var(--steel); }
+  .k-signal { color: var(--signal); }
+  .k-state { color: var(--state); }
+  .k-voice { color: var(--voice); }
+  .k-halt { color: var(--halt); }
+  .swatch-dash { border-style: dashed; }
+  .legend-item p { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--muted); }
+
+  /* ---------- console panels ---------- */
+
+  .console { background: var(--console); border: 1px solid var(--console-rule); border-radius: 4px; overflow: hidden; }
+  .console-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px 14px;
+    padding: 11px 16px;
+    background: var(--console-2);
+    border-bottom: 1px solid var(--console-rule);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--console-muted);
+  }
+  .console-bar .lead { color: #E7EDF4; letter-spacing: 0.09em; }
+  .console-bar .tag { color: #E39A3E; }
+  .console-body { padding: 22px 16px 26px; overflow-x: auto; }
+
+  pre.mermaid {
+    margin: 0;
+    text-align: center;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--console-muted);
+    white-space: pre;
+  }
+  pre.mermaid svg { max-width: 100%; height: auto; }
+
+  .console-foot {
+    padding: 12px 16px;
+    border-top: 1px solid var(--console-rule);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    line-height: 1.55;
+    color: var(--console-muted);
+  }
+  .console-foot b { color: #D8E2EC; font-weight: 500; }
+
+  /* ---------- tables ---------- */
+
+  .table-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 3px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  thead th {
+    text-align: left;
+    padding: 11px 14px;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--rule-strong);
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  tbody td { padding: 12px 14px; border-bottom: 1px solid var(--rule); color: var(--muted); vertical-align: top; line-height: 1.5; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody td:first-child { color: var(--ink); font-weight: 550; min-width: 13ch; }
+  td .said {
+    display: block;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: var(--muted);
+  }
+
+  .pill {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 2px;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    border: 1px solid currentColor;
+    background: color-mix(in srgb, currentColor 12%, transparent);
+    white-space: nowrap;
+  }
+  .p-signal { color: var(--signal); }
+  .p-halt { color: var(--halt); }
+  .p-state { color: var(--state); }
+
+  /* ---------- callout ---------- */
+
+  .callout {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 18px 20px;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 2px solid var(--signal);
+    border-radius: 3px;
+    max-width: 76ch;
+  }
+  .callout .label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--signal);
+  }
+  .callout p { margin: 0; font-size: 14.5px; line-height: 1.6; color: var(--muted); }
+  .callout p strong { color: var(--ink); font-weight: 600; }
+
+  /* ---------- metrics ---------- */
+
+  .metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .metric { background: var(--surface); padding: 16px; display: flex; flex-direction: column; gap: 3px; }
+  .metric .v {
+    font-family: var(--mono);
+    font-size: 1.42rem;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+  }
+  .metric .k {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+  .metric .n { font-size: 12px; color: var(--muted); line-height: 1.45; }
+
+  /* ---------- deltas ---------- */
+
+  .deltas { display: flex; flex-direction: column; gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; }
+  .delta { background: var(--surface); padding: 18px 20px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px 28px; }
+  .delta .side { display: flex; flex-direction: column; gap: 5px; }
+  .delta .cap { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.11em; text-transform: uppercase; color: var(--faint); }
+  .delta .txt { font-size: 13.5px; line-height: 1.55; color: var(--muted); }
+  .delta .now .cap { color: var(--steel); }
+  .delta .next .cap { color: var(--signal); }
+  .delta .head { grid-column: 1 / -1; font-size: 0.94rem; font-weight: 650; color: var(--ink); margin-bottom: 2px; }
+
+  @media (max-width: 640px) {
+    .delta { grid-template-columns: 1fr; gap: 14px; }
+    .shell { padding: 0 16px 72px; gap: 44px; }
+    .masthead { padding-top: 44px; }
+  }
+
+  hr.rule { border: none; border-top: 1px solid var(--rule); margin: 0; }
+  a { color: var(--signal); text-underline-offset: 2px; }
+  a:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <header class="masthead">
+    <div class="eyebrow">
+      <span>Patient Entries</span>
+      <span class="sep">/</span>
+      <span>Incoming texts</span>
+      <span class="sep">/</span>
+      <span class="dim">how it works now, and where it is going</span>
+    </div>
+    <h1>How Snag handles an incoming text</h1>
+    <p class="standfirst">Two pictures of the same moment. First, what the app does today when a client texts in — sorted by the kind of message they sent. Then, the same moment once Snag reads every message first and decides what it is.</p>
+    <div class="assume">
+      <div class="label">What these diagrams assume</div>
+      <p>The client is already enrolled and has agreed to receive texts, and their message reaches us. Neither of those is interesting to look at: if a message never arrives, that is a fault to fix, not a path to design. So every route here is the route that works.</p>
+    </div>
+  </header>
+
+  <section id="legend">
+    <div class="sec-head">
+      <div class="sec-index">Reading the diagrams</div>
+      <h2>Colour tells you who did it</h2>
+    </div>
+    <div class="prose">
+      <p>Amber means Snag was involved. Everything else the app did on its own. Across the two diagrams, <strong>the amount of amber and where it sits</strong> is the entire story.</p>
+    </div>
+    <div class="legend">
+      <div class="legend-item">
+        <div class="legend-key k-steel"><span class="swatch"></span>The kind of message</div>
+        <p>What the client actually sent.</p>
+      </div>
+      <div class="legend-item">
+        <div class="legend-key k-signal"><span class="swatch swatch-dash"></span>Snag</div>
+        <p>The AI reads something and answers a question about it. A dashed edge means it only happens sometimes — the condition is written in the box.</p>
+      </div>
+      <div class="legend-item">
+        <div class="legend-key k-state"><span class="swatch"></span>The app acts</div>
+        <p>Something is saved, scheduled, cancelled, or the provider is alerted.</p>
+      </div>
+      <div class="legend-item">
+        <div class="legend-key k-voice"><span class="swatch"></span>A text goes out</div>
+        <p>A message a real person receives on their phone.</p>
+      </div>
+      <div class="legend-item">
+        <div class="legend-key k-halt"><span class="swatch"></span>Nothing happens</div>
+        <p>No response has been built for this yet.</p>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <section id="today">
+    <div class="sec-head">
+      <div class="sec-index">Diagram 1 · today</div>
+      <h2>A client texts in</h2>
+    </div>
+    <div class="prose">
+      <p>Read each row left to right: <strong>the kind of message, what the app does about it, and what the client gets back.</strong> Where Snag is involved, its box holds the question it was asked, and <strong>the arrows leaving that box show what each answer leads to</strong> — including what happens when it says no, or cannot tell.</p>
+      <p>The app works out which row it is on by <strong>looking for keywords</strong>. Snag is only ever brought in after a keyword has already been spotted, to check the guess or to read a detail out of the message.</p>
+      <p>Every Snag box here is <strong>dashed, because none of them run every time</strong> — each has a condition, written inside the box. Two of them are switched off entirely for clinics that have AI turned off. Most messages that reach us today are never seen by Snag at all.</p>
+    </div>
+
+    <div class="console">
+      <div class="console-bar">
+        <span class="lead">Today</span>
+        <span>a client texts the clinic number</span>
+        <span class="tag">Snag can help in 5 rows · never automatically</span>
+      </div>
+      <div class="console-body">
+<pre class="mermaid">
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"ui-monospace, SFMono-Regular, Menlo, monospace","fontSize":"13px","primaryColor":"#1A212B","primaryTextColor":"#C3CEDA","primaryBorderColor":"#55657A","lineColor":"#5A6A7D","textColor":"#93A2B3","edgeLabelBackground":"#0E131A","clusterBkg":"#121821","clusterBorder":"#2C3745"}}}%%
+flowchart LR
+  S(["A client texts <br/>the clinic number"]):::start
+
+  S --> T1["An everyday check-in"]:::type
+  T1 --> A1["Saved for the provider to read"]:::state
+  A1 --> R1["Thanks for your entry"]:::voice
+
+  S --> T2["Asking for an appointment"]:::type
+  T2 --> A2["Saved. A keyword flags it <br/>as possibly scheduling"]:::state
+  A2 --> G2["Snag: is this really <br/>about scheduling? <br/>· only when a keyword hits first, <br/>and the clinic has AI on"]:::llm
+  G2 -->|"yes"| A2B["Request logged, <br/>provider alerted"]:::state
+  A2B --> R2["We have shared your request, <br/>the office will be in touch"]:::voice
+  G2 -->|"no, false alarm"| R2B["Nothing logged. Stays an everyday <br/>entry, ordinary thank-you"]:::voice
+
+  S --> T3["Cancelling an appointment"]:::type
+  T3 --> A3["Saved. A keyword flags it <br/>as possibly a cancellation"]:::state
+  A3 --> G3["Snag: is this really <br/>a cancellation? <br/>· only when a keyword hits first, <br/>and the clinic has AI on"]:::llm
+  G3 -->|"yes"| A3B["Provider alerted, day-before <br/>reminder cancelled"]:::state
+  A3B --> R3["We have let the office know, <br/>they will follow up"]:::voice
+  G3 -->|"no, false alarm"| R3B["Nothing logged. Stays an everyday <br/>entry, ordinary thank-you"]:::voice
+
+  S --> T4["Asking for a <br/>journaling reminder"]:::type
+  T4 --> A4["Plain wording parser reads <br/>the time and the days"]:::state
+  A4 -->|"read it"| R4["You will get a reminder at that time, <br/>plus how to change it"]:::voice
+  A4 -->|"cannot read it"| G4["Snag: what time and <br/>what days did they mean? <br/>· only when the plain wording <br/>parser cannot read it first"]:::llm
+  G4 -->|"worked it out"| R4
+  G4 -->|"still unclear"| R4B["Saved as an everyday entry <br/>instead. Nothing is lost"]:::voice
+
+  S --> T5["Turning a reminder off"]:::type
+  T5 --> A5["One reminder? Off right away. <br/>Two or more? We ask which one"]:::state
+  A5 --> G5["Snag: which reminder <br/>are they pointing at? <br/>· only on their reply <br/>to that question"]:::llm
+  G5 -->|"all of them"| R5A["All of them turned off"]:::state
+  G5 -->|"that one"| R5B["Just that one turned off"]:::state
+  G5 -->|"cannot tell"| R5C["Nothing changed. I left your <br/>reminders as they are"]:::voice
+
+  S --> T6["Asking what reminders <br/>they have"]:::type
+  T6 --> A6["Their active reminders <br/>are looked up"]:::state
+  A6 --> R6["Here are your active reminders"]:::voice
+
+  S --> T7["Replying inside a conversation <br/>the provider started"]:::type
+  T7 --> A7["Passed straight through <br/>to the provider"]:::voice
+  A7 --> R7["Nothing back to the client, <br/>on purpose"]:::quiet
+  R7 --> G7["Snag: does this conversation <br/>look finished? <br/>· once per conversation, after <br/>at least one exchange"]:::llm
+  G7 -->|"looks finished"| G7A["Provider nudged once: <br/>reply close to end it"]:::voice
+  G7 -->|"still going"| G7B["Nothing sent. The <br/>conversation stays open"]:::quiet
+
+  S --> T8["Picking a time <br/>the provider offered"]:::type
+  T8 --> A8["Provider is told which time <br/>and asked to confirm"]:::voice
+  A8 --> R8["Once they confirm: your appointment <br/>is confirmed, plus a day-before reminder"]:::voice
+
+  S --> T9["An opt-out or <br/>help keyword"]:::type
+  T9 --> A9["Handled exactly as <br/>the carriers require"]:::state
+  A9 --> R9["You have unsubscribed, <br/>or what this service is"]:::voice
+
+  classDef start fill:#1A1D33,stroke:#8B93E8,color:#C8CDF7,stroke-width:1.5px
+  classDef type fill:#212A35,stroke:#A7B9CB,color:#E9F0F7,stroke-width:1.5px
+  classDef llm fill:#302209,stroke:#E39A3E,color:#F0C387,stroke-width:1.5px,stroke-dasharray:6 4
+  classDef state fill:#0F2529,stroke:#4FA394,color:#9FD5CA
+  classDef voice fill:#1A1D33,stroke:#8B93E8,color:#C4C9F5
+  classDef quiet fill:#161C24,stroke:#4A5563,color:#8A96A4,stroke-dasharray:4 3
+</pre>
+      </div>
+      <div class="console-foot">
+        <b>Every one of these is also saved.</b> Whatever else a message turns out to be, the client's words are kept for the provider to read — asking for an appointment does not stop it being a journal entry too. <b>And every no lands somewhere safe:</b> when Snag says no or cannot tell, nothing is invented — the message falls back to an ordinary entry, or nothing changes at all.
+      </div>
+    </div>
+
+    <h3>What the client actually receives</h3>
+    <div class="prose">
+      <p>The exact wording, as sent today. Every reply that could be mistaken for medical advice carries the emergency line.</p>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>They sent</th><th>They get back</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>An everyday check-in</td>
+            <td><span class="said">Message received. Thank you for your journal entry. Please remember that your provider cannot respond directly to your messages. If you need assistance with billing or scheduling, please contact your provider through their office. If this is an emergency, please call 911. Thank you!</span></td>
+          </tr>
+          <tr>
+            <td>Asking for an appointment</td>
+            <td><span class="said">Thanks — we've shared your request with your provider's office, and they'll check the schedule and get back to you about times. If this is an emergency, please call 911.</span></td>
+          </tr>
+          <tr>
+            <td>Cancelling an appointment</td>
+            <td><span class="said">Thanks — we've let your provider's office know and they'll follow up with you directly to confirm. If this is an emergency, please call 911.</span></td>
+          </tr>
+          <tr>
+            <td>Asking for a reminder</td>
+            <td><span class="said">You'll get a reminder every day at 8:00pm. Reply "Reminder off" to turn them off or "Reminder list" to see active reminders.</span></td>
+          </tr>
+          <tr>
+            <td>Turning a reminder off</td>
+            <td><span class="said">Turned off your 8:00pm reminder. Text a time like "Reminder 8:00pm" to set a new one.</span><br><span class="said">Or, when they have several: You have 3 reminders — … Which should I turn off? Reply with the time, or "all".</span></td>
+          </tr>
+          <tr>
+            <td>Asking what reminders they have</td>
+            <td><span class="said">Your active reminders: … Reply "Reminder off" to turn them off.</span></td>
+          </tr>
+          <tr>
+            <td>Replying inside a conversation</td>
+            <td><span class="said">Nothing. The provider is talking to them directly, so an automated reply would only get in the way.</span></td>
+          </tr>
+          <tr>
+            <td>Picking an offered time</td>
+            <td><span class="said">Nothing straight away — the provider is asked to confirm first. Then: Your appointment with the clinic is confirmed for … You can keep texting this number to journal as usual. Thank you!</span></td>
+          </tr>
+          <tr>
+            <td>Opt-out keyword</td>
+            <td><span class="said">You have unsubscribed and can no longer send journal entries. Re-enroll any time at patiententries.com/enroll</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout">
+      <div class="label">The one thing worth knowing about today's version</div>
+      <p>Row seven wins over everything else. <strong>While a conversation with the provider is open, every message the client sends is treated as conversation</strong> — so if they say “actually, can we push it back a day?” in the middle of one, it gets passed along as words and is never logged as a scheduling request. The app only ever lets a message be one thing at a time. That is the limitation the next diagram removes.</p>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <section id="provider">
+    <div class="sec-head">
+      <div class="sec-index">Diagram 1 · the other side</div>
+      <h2>The provider texts back</h2>
+    </div>
+    <div class="prose">
+      <p>Same shape, sorted by what the provider sent. This is where the offered times in the previous diagram come from. Note that <strong>nothing reaches a client until the provider has seen a preview and said yes</strong> — and that when Snag cannot tell, the app asks the provider rather than guessing.</p>
+    </div>
+
+    <div class="console">
+      <div class="console-bar">
+        <span class="lead">Today</span>
+        <span>a provider texts their clinic number</span>
+        <span class="tag">Snag can help in 3 rows · never automatically</span>
+      </div>
+      <div class="console-body">
+<pre class="mermaid">
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"ui-monospace, SFMono-Regular, Menlo, monospace","fontSize":"13px","primaryColor":"#1A212B","primaryTextColor":"#C3CEDA","primaryBorderColor":"#55657A","lineColor":"#5A6A7D","textColor":"#93A2B3","edgeLabelBackground":"#0E131A","clusterBkg":"#121821","clusterBorder":"#2C3745"}}}%%
+flowchart LR
+  P(["A provider texts <br/>from their own phone"]):::start
+
+  P --> V1["Offering times or days <br/>in plain English"]:::type
+  V1 --> B1["The message names <br/>days or times"]:::state
+  B1 --> H1["Snag: which days and times <br/>did they just offer? <br/>· only when the clinic <br/>has AI on"]:::llm
+  H1 -->|"actual times"| C1A["Preview of those times, <br/>to the provider first"]:::voice
+  C1A --> D1A["On yes: client picks <br/>from numbered times"]:::voice
+  H1 -->|"days but no times"| C1B["Preview of those days, <br/>to the provider first"]:::voice
+  C1B --> D1B["On yes: client picks a day, <br/>times follow after"]:::voice
+  H1 -->|"not really scheduling"| C1C["Relayed to the client <br/>word for word"]:::voice
+
+  P --> V2["Replying to a client, <br/>no conversation open yet"]:::type
+  V2 --> B2["Only one client waiting, or a <br/>name in the message?"]:::state
+  B2 -->|"yes, matched already"| C2["Conversation opened, the client <br/>gets their provider's words"]:::voice
+  B2 -->|"no, ambiguous"| H2["Snag: which client <br/>is this meant for? <br/>· only when the clinic <br/>has AI on"]:::llm
+  H2 -->|"that client"| C2
+  H2 -->|"cannot tell"| C2B["Provider asked which client. <br/>Never guesses"]:::voice
+
+  P --> V3["Replying inside an <br/>open conversation"]:::type
+  V3 --> B3["Passed straight through"]:::voice
+
+  P --> V4["Confirming a booking"]:::type
+  V4 --> B4["Appointment confirmed, <br/>conversation closed"]:::state
+  B4 --> C4["Client gets the confirmation <br/>and a day-before reminder"]:::voice
+
+  P --> V5["Sending a prompt <br/>to a client"]:::type
+  V5 --> B5["The message must say <br/>prompt and a number"]:::state
+  B5 --> H5["Snag: which client, <br/>and which prompt? <br/>· plain wording is checked too, <br/>for the standard phrasing"]:::llm
+  H5 -->|"both resolved"| C5["Preview texted to the <br/>provider first"]:::voice
+  C5 --> D5["On yes: the prompt <br/>goes to the client"]:::voice
+  H5 -->|"cannot tell"| C5B["Provider asked to try again. <br/>Nothing is sent"]:::voice
+
+  P --> V6["Closing a conversation"]:::type
+  V6 --> B6["Conversation closed"]:::state
+  B6 --> C6["Client is told the <br/>conversation has closed"]:::voice
+
+  classDef start fill:#1A1D33,stroke:#8B93E8,color:#C8CDF7,stroke-width:1.5px
+  classDef type fill:#212A35,stroke:#A7B9CB,color:#E9F0F7,stroke-width:1.5px
+  classDef llm fill:#302209,stroke:#E39A3E,color:#F0C387,stroke-width:1.5px,stroke-dasharray:6 4
+  classDef state fill:#0F2529,stroke:#4FA394,color:#9FD5CA
+  classDef voice fill:#1A1D33,stroke:#8B93E8,color:#C4C9F5
+</pre>
+      </div>
+      <div class="console-foot">
+        <b>The loop closes here.</b> Once a provider's times go out, the client's reply lands on row eight of the previous diagram — a bare “2” is matched back to the time it stands for. <b>Note the day-only branch:</b> a provider who names days but no times gets a day picker sent to the client first, and the times follow once a day is chosen.
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <section id="triage">
+    <div class="sec-head">
+      <div class="sec-index">Diagram 2 · with triage</div>
+      <h2>Snag reads it first</h2>
+    </div>
+    <div class="prose">
+      <p>Same moment, different order. Instead of the app hunting for keywords and calling Snag to check its guess, <strong>Snag reads every incoming message once</strong> and answers two questions about it. Everything the app does next follows from those two answers.</p>
+      <p>The two questions are deliberately kept apart, because a message is often both things at once. Asking them separately is what lets a message be <strong>passed to the provider and logged as a scheduling request in the same breath</strong> — the thing today's version cannot do.</p>
+      <p>Note the Snag box below is <strong>solid, not dashed</strong>. That is the whole change in one detail: in the diagrams above, every Snag box carried a condition and most messages never reached one. Here there is no condition to carry.</p>
+    </div>
+
+    <div class="console">
+      <div class="console-bar">
+        <span class="lead">With triage</span>
+        <span>a client texts the clinic number</span>
+        <span class="tag">Snag reads everything, once</span>
+      </div>
+      <div class="console-body">
+<pre class="mermaid">
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"ui-monospace, SFMono-Regular, Menlo, monospace","fontSize":"13px","primaryColor":"#1A212B","primaryTextColor":"#C3CEDA","primaryBorderColor":"#55657A","lineColor":"#5A6A7D","textColor":"#93A2B3","edgeLabelBackground":"#0E131A","clusterBkg":"#121821","clusterBorder":"#2C3745"}}}%%
+flowchart LR
+  S(["A client texts <br/>the clinic number"]):::start
+  S --> SN["SNAG READS IT <br/>the message, plus the last few <br/>messages of any open conversation"]:::llm
+
+  SN --> Q1["What are they <br/>asking for?"]:::type
+  SN --> Q2["Is this part of a conversation <br/>already in progress?"]:::type
+
+  Q1 --> W1["An everyday check-in"]:::item
+  W1 --> X1["Saved, and acknowledged"]:::state
+
+  Q1 --> W2["Asking for an appointment"]:::item
+  W2 --> X2["Logged, provider alerted — <br/>even mid-conversation"]:::state
+
+  Q1 --> W3["Picking a time <br/>already offered"]:::item
+  W3 --> X3["Matched to the offer, provider asked <br/>to confirm, day-before reminder set"]:::state
+
+  Q1 --> W4["Cancelling"]:::item
+  W4 --> X4["Provider alerted, day-before <br/>reminder cancelled"]:::state
+
+  Q1 --> W5["Changing how long <br/>an appointment runs"]:::item
+  W5 --> X5["Nothing today — <br/>no response built yet"]:::halt
+
+  Q1 --> W6["Anything about <br/>journaling reminders"]:::item
+  W6 --> X6["Set, turned off, or listed — <br/>no keyword needed"]:::state
+
+  Q1 --> W7["Just saying thanks"]:::item
+  W7 --> X7["Saved quietly, no <br/>canned reply needed"]:::state
+
+  Q1 --> W8["Not clear"]:::item
+  W8 --> X8["Saved as an everyday entry — <br/>the safe default"]:::state
+
+  Q2 --> Y1["No"]:::item
+  Y1 --> Z1["Handled on its own"]:::state
+
+  Q2 --> Y2["Yes, and it continues"]:::item
+  Y2 --> Z2["Passed to the provider, <br/>conversation stays open"]:::voice
+
+  Q2 --> Y3["Yes, and it wraps up"]:::item
+  Y3 --> Z3["Passed to the provider, <br/>conversation closes itself"]:::voice
+
+  SN -.->|"if Snag cannot read it"| SAFE["Treated as an everyday entry. <br/>Nothing is ever lost"]:::state
+
+  classDef start fill:#1A1D33,stroke:#8B93E8,color:#C8CDF7,stroke-width:1.5px
+  classDef type fill:#212A35,stroke:#A7B9CB,color:#E9F0F7,stroke-width:1.5px
+  classDef item fill:#1A212B,stroke:#5A7591,color:#C3CEDA
+  classDef llm fill:#302209,stroke:#E39A3E,color:#F0C387,stroke-width:1.5px
+  classDef state fill:#0F2529,stroke:#4FA394,color:#9FD5CA
+  classDef voice fill:#1A1D33,stroke:#8B93E8,color:#C4C9F5
+  classDef halt fill:#2B1614,stroke:#D2685C,color:#EFA79C
+</pre>
+      </div>
+      <div class="console-foot">
+        <b>Both answers act together.</b> These are not two routes to choose between — a single message can be logged as a scheduling request <em>and</em> passed to the provider <em>and</em> close the conversation, all at once.
+      </div>
+    </div>
+
+    <h3>How well it reads them, and what it costs</h3>
+    <div class="prose">
+      <p>Measured over 542 real and hand-written message shapes, each run three times, against <strong>gemma-4-26b-a4b</strong> — the strongest of the seven models we tested. Every figure below belongs to that one model. None of them is an average across the field.</p>
+    </div>
+    <div class="metrics">
+      <div class="metric">
+        <div class="v">92.9%</div>
+        <div class="k">both answers right</div>
+        <div class="n">what they want and the conversation call, correct together</div>
+      </div>
+      <div class="metric">
+        <div class="v">98.9%</div>
+        <div class="k">conversation answer alone</div>
+        <div class="n">not in one, continues one, or wraps one up</div>
+      </div>
+      <div class="metric">
+        <div class="v">0.4s</div>
+        <div class="k">typical</div>
+        <div class="n">fast enough to answer while the text is still sending</div>
+      </div>
+      <div class="metric">
+        <div class="v">1.7%</div>
+        <div class="k">wobble</div>
+        <div class="n">messages it did not answer the same way every time</div>
+      </div>
+      <div class="metric">
+        <div class="v">$0.014</div>
+        <div class="k">per 100,000 tokens</div>
+        <div class="n">$0.013 for what we send it, $0.040 for what it sends back</div>
+      </div>
+      <div class="metric">
+        <div class="v">$19.66</div>
+        <div class="k">per 100,000 texts</div>
+        <div class="n">reading every message, not just the suspicious ones</div>
+      </div>
+    </div>
+    <div class="prose">
+      <p><strong>What the two accuracy figures actually measure.</strong> Snag answers two questions about every message — <em>what are they asking for?</em> and <em>is this part of a conversation already in progress?</em> — so there are two ways to be right.
+      <br><br>
+      <strong>92.9% is the strict one:</strong> both answers correct on the same message. Getting either half wrong sends that message down the wrong path, so this is the number a client would actually feel.
+      <br><br>
+      <strong>98.9% is only the second question</strong>, scored on its own: is this message outside any conversation, continuing one, or wrapping one up. The first question — working out what the client wants — is the harder half at <strong>93.2%</strong>, and that is where nearly all the remaining mistakes sit.</p>
+      <p><strong>Why those two costs look so far apart:</strong> one text is not one token. Reading a single message costs about <strong>1,450 tokens</strong> — roughly 1,420 of them are the instructions and examples we send with every message, and only about 30 are Snag's answer coming back. So a message costs about a fifth of a cent, and the bill is almost entirely for explaining the job rather than for the reply.</p>
+    </div>
+
+    <div class="callout">
+      <div class="label">If Snag gets one wrong</div>
+      <p>When Snag cannot make sense of a message, it says so, and <strong>the app saves it as an everyday journal entry</strong> — exactly what happens today to anything the keywords do not recognise. So a bad read costs a missed opportunity, never a lost message. That is the same floor we already live with, which is what makes this safe to turn on.</p>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <section id="delta">
+    <div class="sec-head">
+      <div class="sec-index">The difference</div>
+      <h2>Three things actually change</h2>
+    </div>
+
+    <div class="deltas">
+      <div class="delta">
+        <div class="head">Who decides what a message is</div>
+        <div class="side now">
+          <div class="cap">Today</div>
+          <div class="txt">The app looks for keywords and Snag confirms the guess. Anything phrased outside the expected wording is quietly filed as an everyday entry.</div>
+        </div>
+        <div class="side next">
+          <div class="cap">With triage</div>
+          <div class="txt">Snag decides, once, on every message. How well it reads people stops being a guessing game and becomes a number we can watch.</div>
+        </div>
+      </div>
+
+      <div class="delta">
+        <div class="head">Messages sent mid-conversation</div>
+        <div class="side now">
+          <div class="cap">Today</div>
+          <div class="txt">The conversation wins. A request to move an appointment made mid-chat is passed along as words and never logged, so it never reaches the schedule.</div>
+        </div>
+        <div class="side next">
+          <div class="cap">With triage</div>
+          <div class="txt">Both things happen. The provider still sees the message, and the request is logged at the same time.</div>
+        </div>
+      </div>
+
+      <div class="delta">
+        <div class="head">Ending a conversation</div>
+        <div class="side now">
+          <div class="cap">Today</div>
+          <div class="txt">Snag watches the back-and-forth and nudges the provider once to close it. The provider still has to remember to do it.</div>
+        </div>
+        <div class="side next">
+          <div class="cap">With triage</div>
+          <div class="txt">A wrap-up is recognised as it arrives, so the conversation can close itself. No nudge, nothing for the provider to remember.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="prose">
+      <p>What does <strong>not</strong> change: enrolment, consent, and the opt-out and help keywords. Those stay mechanical and word-for-word, because the carriers require them to be. <strong>Snag never gets a say in whether someone has opted out.</strong></p>
+    </div>
+  </section>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+  // Diagrams are authored as Mermaid source inside pre.mermaid blocks.
+  // htmlLabels keeps the line breaks inside node labels working.
+  if (typeof mermaid !== 'undefined') {
+    mermaid.initialize({
+      startOnLoad: true,
+      securityLevel: 'loose',
+      flowchart: { htmlLabels: true, useMaxWidth: true }
+    });
+  }
+  // If the renderer could not load, the raw source is still readable — say why.
+  window.addEventListener('load', function () {
+    if (typeof mermaid !== 'undefined') return;
+    document.querySelectorAll('pre.mermaid').forEach(function (el) {
+      var note = document.createElement('p');
+      note.className = 'mermaid-fallback';
+      note.textContent = 'Diagram could not be drawn (the renderer failed to load). Its source is shown below.';
+      el.parentNode.insertBefore(note, el);
+    });
+  });
+</script>
+</body>
+</html>
