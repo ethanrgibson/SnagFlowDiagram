@@ -267,15 +267,31 @@
   .console-bar .tag { color: #E39A3E; }
   .console-body { padding: 22px 16px 26px; overflow-x: auto; }
 
-  pre.mermaid {
+  /* Raw Mermaid source, before the renderer swaps in an SVG. Styled so a failed
+     render still reads as something deliberate rather than broken markup. */
+  pre.mermaid:not([data-processed]) {
     margin: 0;
-    text-align: center;
+    text-align: left;
     font-family: var(--mono);
     font-size: 12px;
     line-height: 1.55;
     color: var(--console-muted);
-    white-space: pre;
+    white-space: pre-wrap;
   }
+  /* Once rendered, hand typography back to Mermaid. Inherited white-space,
+     line-height and font-size are what clip node and edge labels: the boxes get
+     measured with Mermaid's metrics and then drawn with these. Matching the
+     configured 13px mono keeps measurement and render in agreement. */
+  pre.mermaid[data-processed] {
+    margin: 0;
+    text-align: center;
+    white-space: normal;
+    line-height: normal;
+    font-size: 13px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  /* The page-wide border-box reset also mis-sizes foreignObject labels. */
+  pre.mermaid[data-processed] * { box-sizing: content-box; }
   pre.mermaid svg { max-width: 100%; height: auto; }
 
   .console-foot {
