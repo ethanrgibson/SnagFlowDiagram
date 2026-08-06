@@ -267,31 +267,22 @@
   .console-bar .tag { color: #E39A3E; }
   .console-body { padding: 22px 16px 26px; overflow-x: auto; }
 
-  /* Raw Mermaid source, before the renderer swaps in an SVG. Styled so a failed
-     render still reads as something deliberate rather than broken markup. */
-  pre.mermaid:not([data-processed]) {
-    margin: 0;
-    text-align: left;
-    font-family: var(--mono);
-    font-size: 12px;
-    line-height: 1.55;
-    color: var(--console-muted);
-    white-space: pre-wrap;
-  }
-  /* Once rendered, hand typography back to Mermaid. Inherited white-space,
-     line-height and font-size are what clip node and edge labels: the boxes get
-     measured with Mermaid's metrics and then drawn with these. Matching the
-     configured 13px mono keeps measurement and render in agreement. */
-  pre.mermaid[data-processed] {
+  /* Mermaid draws an SVG inside this <pre>. The element's own `white-space: pre`
+     and any inherited line-height cascade into the generated SVG text and clip
+     node and edge labels, so they are neutralised unconditionally — no reliance
+     on a rendered/not-rendered marker, which is what made earlier attempts miss.
+     If the renderer fails to load, the script below restores source formatting. */
+  pre.mermaid {
     margin: 0;
     text-align: center;
     white-space: normal;
     line-height: normal;
-    font-size: 13px;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--console-muted);
   }
-  /* The page-wide border-box reset also mis-sizes foreignObject labels. */
-  pre.mermaid[data-processed] * { box-sizing: content-box; }
+  pre.mermaid svg,
+  pre.mermaid svg * { box-sizing: content-box; }
   pre.mermaid svg { max-width: 100%; height: auto; }
 
   .console-foot {
@@ -495,7 +486,7 @@
       </div>
       <div class="console-body">
 <pre class="mermaid">
-%%{init: {"theme":"base","themeVariables":{"fontFamily":"ui-monospace, SFMono-Regular, Menlo, monospace","fontSize":"13px","primaryColor":"#1A212B","primaryTextColor":"#C3CEDA","primaryBorderColor":"#55657A","lineColor":"#5A6A7D","textColor":"#93A2B3","edgeLabelBackground":"#0E131A","clusterBkg":"#121821","clusterBorder":"#2C3745"}}}%%
+%%{init: {"theme":"base","flowchart":{"htmlLabels":false},"themeVariables":{"fontFamily":"ui-monospace, SFMono-Regular, Menlo, monospace","fontSize":"13px","primaryColor":"#1A212B","primaryTextColor":"#C3CEDA","primaryBorderColor":"#55657A","lineColor":"#5A6A7D","textColor":"#93A2B3","edgeLabelBackground":"#0E131A","clusterBkg":"#121821","clusterBorder":"#2C3745"}}}%%
 flowchart LR
   S(["A client texts <br/>the clinic number"]):::start
 
@@ -638,7 +629,7 @@ flowchart LR
       </div>
       <div class="console-body">
 <pre class="mermaid">
-%%{init: {"theme":"base","themeVariables":{"fontFamily":"ui-monospace, SFMono-Regular, Menlo, monospace","fontSize":"13px","primaryColor":"#1A212B","primaryTextColor":"#C3CEDA","primaryBorderColor":"#55657A","lineColor":"#5A6A7D","textColor":"#93A2B3","edgeLabelBackground":"#0E131A","clusterBkg":"#121821","clusterBorder":"#2C3745"}}}%%
+%%{init: {"theme":"base","flowchart":{"htmlLabels":false},"themeVariables":{"fontFamily":"ui-monospace, SFMono-Regular, Menlo, monospace","fontSize":"13px","primaryColor":"#1A212B","primaryTextColor":"#C3CEDA","primaryBorderColor":"#55657A","lineColor":"#5A6A7D","textColor":"#93A2B3","edgeLabelBackground":"#0E131A","clusterBkg":"#121821","clusterBorder":"#2C3745"}}}%%
 flowchart LR
   P(["A provider texts <br/>from their own phone"]):::start
 
@@ -710,7 +701,7 @@ flowchart LR
       </div>
       <div class="console-body">
 <pre class="mermaid">
-%%{init: {"theme":"base","themeVariables":{"fontFamily":"ui-monospace, SFMono-Regular, Menlo, monospace","fontSize":"13px","primaryColor":"#1A212B","primaryTextColor":"#C3CEDA","primaryBorderColor":"#55657A","lineColor":"#5A6A7D","textColor":"#93A2B3","edgeLabelBackground":"#0E131A","clusterBkg":"#121821","clusterBorder":"#2C3745"}}}%%
+%%{init: {"theme":"base","flowchart":{"htmlLabels":false},"themeVariables":{"fontFamily":"ui-monospace, SFMono-Regular, Menlo, monospace","fontSize":"13px","primaryColor":"#1A212B","primaryTextColor":"#C3CEDA","primaryBorderColor":"#55657A","lineColor":"#5A6A7D","textColor":"#93A2B3","edgeLabelBackground":"#0E131A","clusterBkg":"#121821","clusterBorder":"#2C3745"}}}%%
 flowchart LR
   S(["A client texts <br/>the clinic number"]):::start
   S --> SN["SNAG READS IT <br/>the message, plus the last few <br/>messages of any open conversation"]:::llm
@@ -873,19 +864,27 @@ flowchart LR
 
 <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
 <script>
-  // Diagrams are authored as Mermaid source inside pre.mermaid blocks.
-  // htmlLabels keeps the line breaks inside node labels working.
+  // Labels are drawn as native SVG text, NOT embedded HTML. HTML labels are
+  // sized from a measurement pass, so any page CSS that changes how the text
+  // finally renders (white-space, line-height, font metrics) makes the box the
+  // wrong size and the text gets clipped. SVG text is measured from what is
+  // actually drawn, so it cannot disagree with itself.
   if (typeof mermaid !== 'undefined') {
     mermaid.initialize({
       startOnLoad: true,
       securityLevel: 'loose',
-      flowchart: { htmlLabels: true, useMaxWidth: true }
+      flowchart: { htmlLabels: false, useMaxWidth: true }
     });
   }
-  // If the renderer could not load, the raw source is still readable — say why.
+  // If the renderer could not load, restore the source formatting the stylesheet
+  // deliberately strips (it would otherwise clip labels in the rendered SVG),
+  // and say why the diagram is missing.
   window.addEventListener('load', function () {
     if (typeof mermaid !== 'undefined') return;
     document.querySelectorAll('pre.mermaid').forEach(function (el) {
+      el.style.whiteSpace = 'pre-wrap';
+      el.style.textAlign = 'left';
+      el.style.lineHeight = '1.55';
       var note = document.createElement('p');
       note.className = 'mermaid-fallback';
       note.textContent = 'Diagram could not be drawn (the renderer failed to load). Its source is shown below.';
